@@ -100,7 +100,15 @@
              | map(attribute='key') | list
              | difference(team_members)
              | difference(reserved_users) }}
-
+             
+    - name: Refuse a mass revoke unless explicitly forced
+      ansible.builtin.assert:
+        that: revoke_users | length <= 3
+        fail_msg: >-
+          Would revoke {{ revoke_users | length }} accounts on {{ inventory_hostname }}
+          ({{ revoke_users | join(', ') }}). Re-run with -e force_revoke=true if intended.
+      when: not (force_revoke | default(false) | bool)
+      
     - name: Revoke shell for departed members
       ansible.builtin.user:
         name: "{{ item }}"
@@ -114,14 +122,6 @@
         key: "{{ lookup('file', '../files/visi-range.pub') }}"
         state: absent
       loop: "{{ revoke_users }}"
-
-    - name: Refuse a mass revoke unless explicitly forced
-      ansible.builtin.assert:
-        that: revoke_users | length <= 3
-        fail_msg: >-
-          Would revoke {{ revoke_users | length }} accounts on {{ inventory_hostname }}
-          ({{ revoke_users | join(', ') }}). Re-run with -e force_revoke=true if intended.
-      when: not (force_revoke | default(false) | bool)
 
     - name: Report
       ansible.builtin.debug:
