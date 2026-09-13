@@ -1,10 +1,66 @@
 ---
-- name: Provision student accounts on team Kali boxes
+- name: Provision student accounts from Keycloak group membership
   hosts: kali
   gather_facts: false
 
+  vars:
+    kc_base: "http://keycloak:8080"
+    kc_realm: vaquero
+    kc_client_id: ansible-provisioner
+    kc_client_secret: "{{ lookup('env', 'KC_CLIENT_SECRET') }}"
+    team_name: "{{ inventory_hostname | regex_replace('^kali-', '') }}"
+    reserved_users:
+      - nobody
+      - kali
+      - root
+
   tasks:
-    - name: Create student account
+    - name: Fail early if the Keycloak secret is missing
+      ansible.builtin.assert:
+        that: kc_client_secret | length > 0
+        fail_msg: "KC_CLIENT_SECRET is not set. Attach the variable group to this template."
+      run_once: true
+      delegate_to: localhost
+
+    - name: Get a service account token
+      ansible.builtin.uri:
+        url: "{{ kc_base }}/realms/{{ kc_realm }}/protocol/openid-connect/token"
+        method: POST
+        body_format: form-urlencoded
+        body:
+          grant_type: client_credentials
+          client_id: "{{ kc_client_id }}"
+          client_secret: "{{ kc_client_secret }}"
+      register: kc_token
+      delegate_to: localhost
+      run_once: true
+      no_log: true
+
+    - name: Find this team's group
+      ansible.builtin.uri:
+        url: "{{ kc_base }}/admin/realms/{{ kc_realm }}/groups?search={{ team_name }}&exact=true"
+        headers:
+          Authorization: "Bearer {{ kc_token.json.access_token }}"
+      register: kc_group
+      delegate_to: localhost
+
+    - name: List enabled group members
+      ansible.builtin.uri:
+        url: "{{ kc_base }}/admin/realms/{{ kc_realm }}/groups/{{ kc_group.json[0].id }}/members?max=200"
+        headers:
+          Authorization: "Bearer {{ kc_token.json.access_token }}"
+      register: kc_members
+      delegate_to: localhost
+      when: kc_group.json | length > 0
+
+    - name: Build the member list
+      ansible.builtin.set_fact:
+        team_members: >-
+          {{ (kc_members.json | default([]))
+             | selectattr('enabled', 'defined') | selectattr('enabled')
+             | map(attribute='username') | list }}
+
+    - name: Create student accounts
       ansible.builtin.user:
         name: "{{ item }}"
         shell: /bin/bash
@@ -13,16 +69,42 @@
         create_home: true
         password: '!'
         state: present
-      loop: "{{ team_members | default([]) }}"
+      loop: "{{ team_members }}"
 
-    - name: Install range public key for student
+    - name: Install the range key
       ansible.posix.authorized_key:
         user: "{{ item }}"
         key: "{{ lookup('file', '../files/visi-range.pub') }}"
         state: present
-        exclusive: false
-      loop: "{{ team_members | default([]) }}"
+      loop: "{{ team_members }}"
+
+    - name: Read existing accounts
+      ansible.builtin.getent:
+        database: passwd
+
+    - name: Work out who no longer belongs
+      ansible.builtin.set_fact:
+        revoke_users: >-
+          {{ getent_passwd | dict2items
+             | selectattr('value.1', 'match', '^[1-9][0-9]{3,}$')
+             | map(attribute='key') | list
+             | difference(team_members)
+             | difference(reserved_users) }}
+
+    - name: Revoke shell for departed members
+      ansible.builtin.user:
+        name: "{{ item }}"
+        shell: /usr/sbin/nologin
+        state: present
+      loop: "{{ revoke_users }}"
+
+    - name: Revoke keys for departed members
+      ansible.posix.authorized_key:
+        user: "{{ item }}"
+        key: "{{ lookup('file', '../files/visi-range.pub') }}"
+        state: absent
+      loop: "{{ revoke_users }}"
 
     - name: Report
       ansible.builtin.debug:
-        msg: "{{ inventory_hostname }}: {{ team_members | default([]) | length }} account(s)"
+        msg: "{{ inventory_hostname }} ({{ team_name }}): {{ team_members | length }} active, {{ revoke_users | length }} revoked"
