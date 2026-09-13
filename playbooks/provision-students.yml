@@ -1,0 +1,28 @@
+---
+- name: Provision student accounts on team Kali boxes
+  hosts: kali
+  gather_facts: false
+
+  tasks:
+    - name: Create student account
+      ansible.builtin.user:
+        name: "{{ item }}"
+        shell: /bin/bash
+        groups: sudo
+        append: true
+        create_home: true
+        password: '!'
+        state: present
+      loop: "{{ team_members | default([]) }}"
+
+    - name: Install range public key for student
+      ansible.posix.authorized_key:
+        user: "{{ item }}"
+        key: "{{ lookup('file', '../files/visi-range.pub') }}"
+        state: present
+        exclusive: false
+      loop: "{{ team_members | default([]) }}"
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: {{ team_members | default([]) | length }} account(s)"
