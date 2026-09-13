@@ -115,6 +115,14 @@
         state: absent
       loop: "{{ revoke_users }}"
 
+    - name: Refuse a mass revoke unless explicitly forced
+      ansible.builtin.assert:
+        that: revoke_users | length <= 3
+        fail_msg: >-
+          Would revoke {{ revoke_users | length }} accounts on {{ inventory_hostname }}
+          ({{ revoke_users | join(', ') }}). Re-run with -e force_revoke=true if intended.
+      when: not (force_revoke | default(false) | bool)
+
     - name: Report
       ansible.builtin.debug:
         msg: "{{ inventory_hostname }} ({{ team_name }}): {{ team_members | length }} active, {{ revoke_users | length }} revoked"
