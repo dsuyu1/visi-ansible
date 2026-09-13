@@ -93,14 +93,16 @@
       ansible.builtin.getent:
         database: passwd
 
+    - name: List local user accounts
+      ansible.builtin.set_fact:
+        local_users: >-
+          {{ ansible_facts['getent_passwd'] | dict2items
+             | selectattr('value.1', 'match', '^[1-9][0-9][0-9][0-9]')
+             | map(attribute='key') | list }}
+
     - name: Work out who no longer belongs
       ansible.builtin.set_fact:
-        revoke_users: >-
-          {{ ansible_facts['getent_passwd'] | dict2items
-             | selectattr('value.1', 'match', '^[1-9][0-9]{3,}$')
-             | map(attribute='key') | list
-             | difference(team_members)
-             | difference(reserved_users) }}
+        revoke_users: "{{ local_users | difference(team_members) | difference(reserved_users) }}"
              
     - name: Refuse a mass revoke unless explicitly forced
       ansible.builtin.assert:
