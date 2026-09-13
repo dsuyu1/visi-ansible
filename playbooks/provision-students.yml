@@ -38,20 +38,30 @@
 
     - name: Find this team's group
       ansible.builtin.uri:
-        url: "{{ kc_base }}/admin/realms/{{ kc_realm }}/groups?search={{ team_name }}&exact=true"
+        url: "{{ kc_base }}/admin/realms/{{ kc_realm }}/groups?search={{ team_name }}"
         headers:
           Authorization: "Bearer {{ kc_token.json.access_token }}"
       register: kc_group
       delegate_to: localhost
 
+    - name: Resolve the exact group id
+      ansible.builtin.set_fact:
+        kc_group_id: >-
+          {{ (kc_group.json | selectattr('name', 'equalto', team_name)
+              | map(attribute='id') | list | first) | default('') }}
+
+    - name: Fail if this team has no Keycloak group
+      ansible.builtin.assert:
+        that: kc_group_id | length > 0
+        fail_msg: "No Keycloak group named '{{ team_name }}' was found"
+
     - name: List enabled group members
       ansible.builtin.uri:
-        url: "{{ kc_base }}/admin/realms/{{ kc_realm }}/groups/{{ kc_group.json[0].id }}/members?max=200"
+        url: "{{ kc_base }}/admin/realms/{{ kc_realm }}/groups/{{ kc_group_id }}/members?max=200"
         headers:
           Authorization: "Bearer {{ kc_token.json.access_token }}"
       register: kc_members
       delegate_to: localhost
-      when: kc_group.json | length > 0
 
     - name: Build the member list
       ansible.builtin.set_fact:
@@ -85,7 +95,7 @@
     - name: Work out who no longer belongs
       ansible.builtin.set_fact:
         revoke_users: >-
-          {{ getent_passwd | dict2items
+          {{ ansible_facts['getent_passwd'] | dict2items
              | selectattr('value.1', 'match', '^[1-9][0-9]{3,}$')
              | map(attribute='key') | list
              | difference(team_members)
