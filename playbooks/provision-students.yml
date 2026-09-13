@@ -9,6 +9,8 @@
     kc_client_id: ansible-provisioner
     kc_client_secret: "{{ lookup('env', 'KC_CLIENT_SECRET') }}"
     team_name: "{{ inventory_hostname | regex_replace('^kali-', '') }}"
+    team_group_parent: "students"
+    team_group_path: "{{ (team_group_parent ~ '/' ~ team_name) if team_group_parent else team_name }}"
     reserved_users:
       - nobody
       - kali
@@ -36,24 +38,23 @@
       run_once: true
       no_log: true
 
-    - name: Find this team's group
+    - name: Resolve this team's group by path
       ansible.builtin.uri:
-        url: "{{ kc_base }}/admin/realms/{{ kc_realm }}/groups?search={{ team_name }}"
+        url: "{{ kc_base }}/admin/realms/{{ kc_realm }}/group-by-path/{{ team_group_path }}"
         headers:
           Authorization: "Bearer {{ kc_token.json.access_token }}"
+        status_code: [200, 404]
       register: kc_group
       delegate_to: localhost
 
-    - name: Resolve the exact group id
-      ansible.builtin.set_fact:
-        kc_group_id: >-
-          {{ (kc_group.json | selectattr('name', 'equalto', team_name)
-              | map(attribute='id') | list | first) | default('') }}
-
     - name: Fail if this team has no Keycloak group
       ansible.builtin.assert:
-        that: kc_group_id | length > 0
-        fail_msg: "No Keycloak group named '{{ team_name }}' was found"
+        that: kc_group.status == 200
+        fail_msg: "No Keycloak group at path '/{{ team_group_path }}'"
+
+    - name: Note the group id
+      ansible.builtin.set_fact:
+        kc_group_id: "{{ kc_group.json.id }}"
 
     - name: List enabled group members
       ansible.builtin.uri:
